@@ -1,64 +1,24 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
 from typing import Any
 
-from app.audit import AuditLogger
-from app.config import Settings
-from app.policy import ToolPolicy
-from app.tool_schema import CachedTool, normalize_mcp_tool
+from app.core.structured_log import StructuredLogger
+from app.core.config import Settings
+from app.mcp.cache import ToolCacheSnapshot
+from app.mcp.policy import ToolPolicy
+from app.mcp.schema import normalize_mcp_tool
 
 
 class McpClientError(RuntimeError):
     pass
 
 
-@dataclass(frozen=True)
-class ToolCacheSnapshot:
-    tools: tuple[CachedTool, ...]
-
-    @property
-    def is_valid(self) -> bool:
-        return bool(self.tools)
-
-    def public_tools(self, include_schema: bool = False) -> list[dict[str, Any]]:
-        result = []
-        for tool in self.tools:
-            item: dict[str, Any] = {"name": tool.name, "description": tool.description}
-            if include_schema:
-                item["input_schema"] = tool.input_schema
-            result.append(item)
-        return result
-
-class ToolCache:
-    def __init__(self) -> None:
-        self._snapshot = ToolCacheSnapshot(())
-        self._lock = asyncio.Lock()
-        self.last_error: str | None = None
-
-    async def snapshot(self) -> ToolCacheSnapshot:
-        return self._snapshot
-
-    @property
-    def is_valid(self) -> bool:
-        return self._snapshot.is_valid
-
-    async def replace(self, snapshot: ToolCacheSnapshot) -> None:
-        async with self._lock:
-            self._snapshot = snapshot
-            self.last_error = None
-
-    async def mark_error(self, error: str) -> None:
-        self.last_error = error
-
-
 class McpClient:
-    def __init__(self, settings: Settings, audit: AuditLogger) -> None:
+    def __init__(self, settings: Settings, logger: StructuredLogger) -> None:
         self._settings = settings
-        self._audit = audit
+        self._logger = logger
         self._headers = {"Authorization": f"Bearer {settings.mcp_auth_token}"}
 
     def session(self) -> "McpSession":
@@ -73,17 +33,17 @@ class McpClient:
             raise McpClientError(f"Failed to load MCP tools: {exc}") from exc
 
         allowed_names = policy.filter_tool_names([getattr(tool, "name", "") for tool in raw_tools])
-        cached: list[CachedTool] = []
+        cached = []
         for tool in raw_tools:
             if getattr(tool, "name", None) not in allowed_names:
                 continue
             converted = normalize_mcp_tool(tool)
             if converted is None:
-                self._audit.debug("mcp_tool_schema_omitted", tool_name=getattr(tool, "name", None))
+                self._logger.debug("mcp_tool_schema_omitted", tool_name=getattr(tool, "name", None))
                 continue
             cached.append(converted)
         if not cached:
-            raise McpClientError("No usable allowed MCP tools after filtering/conversion")
+            raise McpClientError("No usable MCP tools after filtering/conversion")
         return ToolCacheSnapshot(tuple(cached))
 
     def _stringify_result(self, result: Any) -> str:
@@ -112,14 +72,14 @@ class McpSession:
     async def __aenter__(self) -> "McpSession":
         try:
             from mcp import ClientSession
-            from mcp.client.sse import sse_client
+            from mcp.client.streamable_http import streamablehttp_client
         except Exception as exc:  # pragma: no cover - depends on installed package
             raise McpClientError("Official Python MCP SDK is not available") from exc
 
         stack = AsyncExitStack()
         try:
-            read, write = await stack.enter_async_context(
-                sse_client(self._client._settings.mcp_server_url, headers=self._client._headers)
+            read, write, _ = await stack.enter_async_context(
+                streamablehttp_client(self._client._settings.mcp_server_url, headers=self._client._headers)
             )
             self._session = await stack.enter_async_context(ClientSession(read, write))
             await self._session.initialize()

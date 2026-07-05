@@ -5,9 +5,9 @@ from typing import Any
 
 from openai import AsyncOpenAI, OpenAIError
 
-from app.config import Settings
-from app.llm import LLMError, LLMResponse, ToolCall, ToolResult
-from app.tool_schema import CachedTool
+from app.core.config import Settings
+from app.llm.client import LLMError, LLMResponse, ToolCall, ToolResult
+from app.mcp.schema import CachedTool
 
 
 SYSTEM_INSTRUCTIONS = """You are the RuTV playlist service admin assistant.
@@ -108,6 +108,10 @@ def parse_openai_response(response: Any) -> LLMResponse:
     for item in output:
         if _get_attr_or_key(item, "type") != "function_call":
             continue
+        call_id = _get_attr_or_key(item, "call_id", _get_attr_or_key(item, "id", ""))
+        name = _get_attr_or_key(item, "name", "")
+        if not isinstance(call_id, str) or not call_id or not isinstance(name, str) or not name:
+            continue
         raw_args = _get_attr_or_key(item, "arguments", "{}")
         try:
             args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
@@ -115,8 +119,8 @@ def parse_openai_response(response: Any) -> LLMResponse:
             args = {}
         tool_calls.append(
             ToolCall(
-                call_id=str(_get_attr_or_key(item, "call_id", _get_attr_or_key(item, "id", ""))),
-                name=str(_get_attr_or_key(item, "name", "")),
+                call_id=call_id,
+                name=name,
                 arguments=args,
             )
         )

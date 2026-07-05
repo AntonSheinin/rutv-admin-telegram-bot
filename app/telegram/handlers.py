@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-from app.main_state import ServiceState, ToolReloadError, reload_tools
+from app.core.state import ServiceState, ToolReloadError, reload_tools
+from app.telegram.bot import extract_message
 
 
 async def process_update(service: ServiceState, update: dict) -> None:
-    if not service.telegram or not service.agent or not service.audit:
+    if not service.telegram or not service.agent or not service.logger:
         return
-    extracted = service.telegram.extract_message(update)
+    extracted = extract_message(update)
     if extracted is None:
-        service.audit.debug("telegram_update_ignored", update_id=update.get("update_id"))
+        service.logger.debug("telegram_update_ignored", update_id=update.get("update_id"))
         return
     update_id, user_id, chat_id, text = extracted
     if not service.telegram.is_admin(user_id):
         await service.telegram.send_text(chat_id, "Unauthorized.")
-        service.audit.warning("telegram_unauthorized", update_id=update_id, user_id=user_id, chat_id=chat_id)
+        service.logger.warning("telegram_unauthorized", update_id=update_id, user_id=user_id, chat_id=chat_id)
         return
     if text.startswith("/"):
         await handle_command(service, chat_id, text)
@@ -24,7 +25,7 @@ async def process_update(service: ServiceState, update: dict) -> None:
         await service.telegram.send_text(chat_id, f"No action was performed. Service is degraded: {reason}.")
         return
 
-    snapshot = await service.tool_cache.snapshot()
+    snapshot = service.tool_cache.snapshot()
 
     async def run_agent() -> str:
         result = await service.agent.handle_message(text, snapshot, update_id=update_id, user_id=user_id, chat_id=chat_id)
@@ -50,7 +51,7 @@ async def handle_command(service: ServiceState, chat_id: int, text: str) -> None
         else:
             await service.telegram.send_text(chat_id, f"Status: degraded ({reason})")
     elif command == "/tools":
-        snapshot = await service.tool_cache.snapshot()
+        snapshot = service.tool_cache.snapshot()
         if not snapshot.tools:
             await service.telegram.send_text(chat_id, "No MCP tools are currently available.")
         else:

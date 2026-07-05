@@ -22,18 +22,17 @@ def redact(value: Any) -> Any:
         return redacted
     if isinstance(value, list):
         return [redact(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact(item) for item in value)
     return value
 
 
-class AuditLogger:
-    def __init__(self, path: str = "", level: str = "INFO") -> None:
+class StructuredLogger:
+    def __init__(self, level: str = "INFO") -> None:
         self._logger = logging.getLogger("rutv_admin_bot")
         self._logger.setLevel(_parse_level(level))
         self._logger.handlers.clear()
-        if path:
-            handler: logging.Handler = logging.FileHandler(path, encoding="utf-8")
-        else:
-            handler = logging.StreamHandler(sys.stdout)
+        handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(logging.Formatter("%(message)s"))
         self._logger.addHandler(handler)
 

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from app.audit import AuditLogger
-from app.config import Settings
+from app.core.structured_log import StructuredLogger
+from app.core.config import Settings
 
 UpdateHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -38,16 +37,15 @@ class TTLUpdateDedupe:
 
 
 class WebhookQueue:
-    def __init__(self, settings: Settings, audit: AuditLogger, handler: UpdateHandler) -> None:
+    def __init__(self, settings: Settings, logger: StructuredLogger, handler: UpdateHandler) -> None:
         self._settings = settings
-        self._audit = audit
+        self._logger = logger
         self._handler = handler
         self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=settings.update_queue_max_size)
         self._dedupe = TTLUpdateDedupe(settings.update_dedupe_ttl_seconds)
         self._workers: list[asyncio.Task[None]] = []
         self._accepting = False
-        self._global_semaphore = asyncio.Semaphore(settings.max_concurrent_requests)
-        self._user_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._user_locks: dict[int, asyncio.Lock] = {}
 
     @property
     def workers_running(self) -> bool:
@@ -71,9 +69,9 @@ class WebhookQueue:
             self._queue.put_nowait(update)
         except asyncio.QueueFull:
             await self._dedupe.forget(update_id)
-            self._audit.warning("queue_full", update_id=update_id)
+            self._logger.warning("queue_full", update_id=update_id)
             return "full"
-        self._audit.debug("queue_enqueued", update_id=update_id)
+        self._logger.debug("queue_enqueued", update_id=update_id)
         return "enqueued"
 
     async def shutdown(self) -> None:
@@ -88,21 +86,27 @@ class WebhookQueue:
         self._workers.clear()
 
     async def _worker(self, idx: int) -> None:
-        self._audit.debug("worker_start", worker=idx)
+        self._logger.debug("worker_start", worker=idx)
         while True:
             update = await self._queue.get()
             try:
-                user_id = _extract_user_id(update)
-                async with self._global_semaphore:
-                    if user_id is None:
-                        await self._handler(update)
-                    else:
-                        async with self._user_locks[user_id]:
-                            await self._handler(update)
+                await self._handle_update(update)
             except Exception as exc:
-                self._audit.error("worker_error", worker=idx, error=str(exc), update_id=update.get("update_id"))
+                self._logger.error("worker_error", worker=idx, error=str(exc), update_id=update.get("update_id"))
             finally:
                 self._queue.task_done()
+
+    async def _handle_update(self, update: dict[str, Any]) -> None:
+        user_id = _extract_user_id(update)
+        if user_id is None:
+            await self._handler(update)
+            return
+
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            await self._handler(update)
+        if not lock.locked() and not _lock_has_waiters(lock):
+            self._user_locks.pop(user_id, None)
 
 
 def _extract_user_id(update: dict[str, Any]) -> int | None:
@@ -110,3 +114,8 @@ def _extract_user_id(update: dict[str, Any]) -> int | None:
     user = message.get("from") if isinstance(message, dict) else None
     user_id = user.get("id") if isinstance(user, dict) else None
     return user_id if isinstance(user_id, int) else None
+
+
+def _lock_has_waiters(lock: asyncio.Lock) -> bool:
+    waiters = getattr(lock, "_waiters", None)
+    return bool(waiters)

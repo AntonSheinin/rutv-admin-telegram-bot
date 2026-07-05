@@ -1,6 +1,6 @@
 import pytest
 
-from app.config import ConfigError, Settings
+from app.core.config import ConfigError, Settings
 
 
 def base_env():
@@ -11,8 +11,6 @@ def base_env():
         "TELEGRAM_ADMIN_USER_IDS": "1,2",
         "MCP_SERVER_URL": "https://example.com/sse",
         "MCP_AUTH_TOKEN": "mcp",
-        "MCP_ALLOWED_TOOLS": "a,b",
-        "ADMIN_API_TOKEN": "admin",
         "OPENAI_API_KEY": "openai",
         "LLM_MODEL": "test-model",
     }
@@ -21,21 +19,16 @@ def base_env():
 def test_settings_parse_defaults():
     settings = Settings.from_env(base_env())
     assert settings.telegram_admin_user_ids == {1, 2}
-    assert settings.mcp_allowed_tools == {"a", "b"}
-    assert settings.environment == "production"
+    assert settings.mcp_disabled_tools == set()
     assert settings.log_level == "INFO"
     assert settings.max_tool_calls == 5
 
 
-def test_allow_all_tools_only_local():
+def test_disabled_tools_parse():
     env = base_env()
-    env["MCP_ALLOWED_TOOLS"] = ""
-    env["MCP_ALLOW_ALL_TOOLS"] = "true"
-    with pytest.raises(ConfigError):
-        Settings.from_env(env)
-    env["ENVIRONMENT"] = "local"
+    env["MCP_DISABLED_TOOLS"] = "delete_playlist, refresh_playlist"
     settings = Settings.from_env(env)
-    assert settings.mcp_allow_all_tools is True
+    assert settings.mcp_disabled_tools == {"delete_playlist", "refresh_playlist"}
 
 
 def test_admin_ids_required_and_integer():

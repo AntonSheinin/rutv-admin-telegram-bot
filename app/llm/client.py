@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.tool_schema import CachedTool
+from app.mcp.schema import CachedTool
 
 
 class LLMError(RuntimeError):

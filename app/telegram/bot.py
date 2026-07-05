@@ -9,16 +9,14 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, TelegramServerError
 
-from app.audit import AuditLogger
-from app.config import Settings
+from app.core.config import Settings
 
 SAFE_MESSAGE_LIMIT = 3900
 
 
 class TelegramBotService:
-    def __init__(self, settings: Settings, audit: AuditLogger) -> None:
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.audit = audit
         self.bot = Bot(token=settings.telegram_bot_token, default=DefaultBotProperties(parse_mode=None))
 
     async def register_webhook(self) -> None:
@@ -36,22 +34,6 @@ class TelegramBotService:
 
     def is_admin(self, user_id: int | None) -> bool:
         return user_id in self.settings.telegram_admin_user_ids if user_id is not None else False
-
-    def extract_message(self, update: dict[str, Any]) -> tuple[int, int, int, str] | None:
-        message = update.get("message") or update.get("edited_message")
-        if not isinstance(message, dict):
-            return None
-        text = message.get("text")
-        if not isinstance(text, str) or not text.strip():
-            return None
-        chat = message.get("chat") or {}
-        user = message.get("from") or {}
-        update_id = update.get("update_id")
-        chat_id = chat.get("id")
-        user_id = user.get("id")
-        if not isinstance(update_id, int) or not isinstance(chat_id, int) or not isinstance(user_id, int):
-            return None
-        return update_id, user_id, chat_id, text.strip()
 
     async def send_text(self, chat_id: int, text: str) -> None:
         chunks = split_telegram_text(text)
@@ -103,6 +85,23 @@ class TelegramBotService:
                 await asyncio.wait_for(stop.wait(), timeout=4)
             except TimeoutError:
                 continue
+
+
+def extract_message(update: dict[str, Any]) -> tuple[int, int, int, str] | None:
+    message = update.get("message") or update.get("edited_message")
+    if not isinstance(message, dict):
+        return None
+    text = message.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    chat = message.get("chat") or {}
+    user = message.get("from") or {}
+    update_id = update.get("update_id")
+    chat_id = chat.get("id")
+    user_id = user.get("id")
+    if not isinstance(update_id, int) or not isinstance(chat_id, int) or not isinstance(user_id, int):
+        return None
+    return update_id, user_id, chat_id, text.strip()
 
 
 def split_telegram_text(text: str) -> list[str]:

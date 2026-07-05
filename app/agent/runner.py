@@ -7,11 +7,12 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.audit import AuditLogger
-from app.config import Settings
-from app.llm import LLMClient, LLMError, ToolCall, ToolResult
-from app.mcp_client import McpClient, McpClientError, ToolCacheSnapshot
-from app.policy import PolicyError, ToolPolicy
+from app.core.structured_log import StructuredLogger
+from app.core.config import Settings
+from app.llm.client import LLMClient, LLMError, ToolCall, ToolResult
+from app.mcp.cache import ToolCacheSnapshot
+from app.mcp.client import McpClient, McpClientError
+from app.mcp.policy import PolicyError, ToolPolicy
 
 
 @dataclass(frozen=True)
@@ -37,13 +38,13 @@ class Agent:
     def __init__(
         self,
         settings: Settings,
-        audit: AuditLogger,
+        logger: StructuredLogger,
         llm: LLMClient,
         mcp_client: McpClient,
         policy: ToolPolicy,
     ) -> None:
         self._settings = settings
-        self._audit = audit
+        self._logger = logger
         self._llm = llm
         self._mcp_client = mcp_client
         self._policy = policy
@@ -59,7 +60,7 @@ class Agent:
     ) -> AgentResult:
         request_id = str(uuid.uuid4())
         started = time.monotonic()
-        self._audit.info(
+        self._logger.info(
             "agent_request_start",
             request_id=request_id,
             update_id=update_id,
@@ -71,7 +72,7 @@ class Agent:
                 self._run(text, tool_snapshot, request_id=request_id, update_id=update_id, user_id=user_id, chat_id=chat_id),
                 timeout=self._settings.request_timeout_seconds,
             )
-            self._audit.info(
+            self._logger.info(
                 "agent_request_finish",
                 request_id=request_id,
                 status="ok",
@@ -79,7 +80,7 @@ class Agent:
             )
             return AgentResult(text=result, request_id=request_id)
         except (asyncio.TimeoutError, LLMError, McpClientError, PolicyError) as exc:
-            self._audit.error(
+            self._logger.error(
                 "agent_request_finish",
                 request_id=request_id,
                 status="error",
@@ -103,15 +104,26 @@ class Agent:
 
         conversation = self._llm.start_conversation(text)
         tools = self._llm.prepare_tools(tool_snapshot.tools)
+        prepared_tool_names = {_tool_name(tool) for tool in tools}
+        prepared_tool_names.discard(None)
+        omitted_tool_names = sorted({tool.name for tool in tool_snapshot.tools} - prepared_tool_names)
+        if omitted_tool_names:
+            self._logger.info(
+                "llm_provider_tools_omitted",
+                request_id=request_id,
+                provider=self._llm.provider,
+                tool_names=omitted_tool_names,
+            )
         if not tools:
             return "No action was performed. No tools are available for the configured LLM provider."
+        allowed_tool_names = {name for name in prepared_tool_names if name is not None}
         tool_calls_used = 0
 
         async with AsyncExitStack() as stack:
             mcp_session = None
             while True:
                 llm_response = await self._llm.create_response(conversation, tools)
-                self._audit.debug(
+                self._logger.debug(
                     "llm_response",
                     request_id=request_id,
                     provider=self._llm.provider,
@@ -127,6 +139,7 @@ class Agent:
                     tool_calls_used += 1
                     if tool_calls_used > self._settings.max_tool_calls:
                         return "No action was performed beyond the configured tool-call limit."
+                    self._policy.validate_tool_call(tool_call.name, tool_call.arguments, allowed_tool_names)
                     if mcp_session is None:
                         mcp_session = await stack.enter_async_context(self._mcp_client.session())
                     self._llm.append_tool_result(
@@ -152,8 +165,7 @@ class Agent:
         user_id: int,
         chat_id: int,
     ) -> ToolResult:
-        self._policy.validate_tool_call(tool_call.name, tool_call.arguments)
-        self._audit.info(
+        self._logger.info(
             "mcp_tool_call_start",
             request_id=request_id,
             tool_name=tool_call.name,
@@ -173,7 +185,7 @@ class Agent:
             status = "error"
 
         output, truncated = self._truncate_tool_result(output)
-        self._audit.info(
+        self._logger.info(
             "mcp_tool_call_finish",
             request_id=request_id,
             tool_name=tool_call.name,
@@ -189,3 +201,11 @@ class Agent:
         truncated = encoded[: self._settings.max_tool_result_bytes].decode("utf-8", errors="replace")
         truncated += "\n[Output truncated before LLM summarization.]"
         return truncated, True
+
+
+def _tool_name(tool: object) -> str | None:
+    if isinstance(tool, dict):
+        name = tool.get("name")
+        return name if isinstance(name, str) else None
+    name = getattr(tool, "name", None)
+    return name if isinstance(name, str) else None

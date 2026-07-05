@@ -2,13 +2,13 @@ from dataclasses import dataclass
 
 import pytest
 
-from app.agent import Agent
-from app.audit import AuditLogger
-from app.config import Settings
-from app.llm import LLMResponse, ToolCall
-from app.mcp_client import ToolCacheSnapshot
-from app.policy import ToolPolicy
-from app.tool_schema import CachedTool
+from app.agent.runner import Agent
+from app.core.structured_log import StructuredLogger
+from app.core.config import Settings
+from app.llm.client import LLMResponse, ToolCall
+from app.mcp.cache import ToolCacheSnapshot
+from app.mcp.policy import ToolPolicy
+from app.mcp.schema import CachedTool
 
 from tests.test_config import base_env
 
@@ -24,6 +24,23 @@ def snapshot() -> ToolCacheSnapshot:
         input_schema={"type": "object", "properties": {}},
     )
     return ToolCacheSnapshot((tool,))
+
+
+def snapshot_with_omitted_tool() -> ToolCacheSnapshot:
+    return ToolCacheSnapshot(
+        (
+            CachedTool(
+                name="refresh_playlist",
+                description="Refresh",
+                input_schema={"type": "object", "properties": {}},
+            ),
+            CachedTool(
+                name="omitted_tool",
+                description="Omitted",
+                input_schema={"type": "object", "properties": {}},
+            ),
+        )
+    )
 
 
 class DirectLLM:
@@ -76,6 +93,33 @@ class ToolThenFinalLLM:
         conversation.append({"tool": tool_call.name, "result": result.result})
 
 
+class MissingToolLLM(ToolThenFinalLLM):
+    async def create_response(self, input_items, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                text="",
+                tool_calls=[ToolCall(call_id="call_1", name="missing_tool", arguments={})],
+                provider_state=[{"type": "function_call", "call_id": "call_1", "name": "missing_tool", "arguments": "{}"}],
+            )
+        return LLMResponse(text="Should not get here.", tool_calls=[])
+
+
+class OmittedPreparedToolLLM(ToolThenFinalLLM):
+    def prepare_tools(self, tools):
+        return [{"name": "refresh_playlist"}]
+
+    async def create_response(self, input_items, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                text="",
+                tool_calls=[ToolCall(call_id="call_1", name="omitted_tool", arguments={})],
+                provider_state=[{"type": "function_call", "call_id": "call_1", "name": "omitted_tool", "arguments": "{}"}],
+            )
+        return LLMResponse(text="Should not get here.", tool_calls=[])
+
+
 class FakeMcpSession:
     def __init__(self, parent):
         self.parent = parent
@@ -105,7 +149,7 @@ class FakeMcpClient:
 @pytest.mark.asyncio
 async def test_agent_direct_answer_does_not_open_mcp_session():
     fake_mcp = FakeMcpClient()
-    agent = Agent(settings(), AuditLogger(), DirectLLM(), fake_mcp, ToolPolicy({"refresh_playlist"}, False, 1000))
+    agent = Agent(settings(), StructuredLogger(), DirectLLM(), fake_mcp, ToolPolicy(set(), 1000))
 
     result = await agent.handle_message("hello", snapshot(), update_id=1, user_id=1, chat_id=1)
 
@@ -116,7 +160,7 @@ async def test_agent_direct_answer_does_not_open_mcp_session():
 @pytest.mark.asyncio
 async def test_agent_reuses_one_mcp_session_for_tool_loop():
     fake_mcp = FakeMcpClient()
-    agent = Agent(settings(), AuditLogger(), ToolThenFinalLLM(), fake_mcp, ToolPolicy({"refresh_playlist"}, False, 1000))
+    agent = Agent(settings(), StructuredLogger(), ToolThenFinalLLM(), fake_mcp, ToolPolicy(set(), 1000))
 
     result = await agent.handle_message("refresh", snapshot(), update_id=1, user_id=1, chat_id=1)
 
@@ -124,3 +168,25 @@ async def test_agent_reuses_one_mcp_session_for_tool_loop():
     assert fake_mcp.open_count == 1
     assert fake_mcp.close_count == 1
     assert fake_mcp.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_tool_not_in_snapshot():
+    fake_mcp = FakeMcpClient()
+    agent = Agent(settings(), StructuredLogger(), MissingToolLLM(), fake_mcp, ToolPolicy(set(), 1000))
+
+    result = await agent.handle_message("refresh", snapshot(), update_id=1, user_id=1, chat_id=1)
+
+    assert "Tool is not available: missing_tool" in result.text
+    assert fake_mcp.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_tool_not_prepared_for_provider():
+    fake_mcp = FakeMcpClient()
+    agent = Agent(settings(), StructuredLogger(), OmittedPreparedToolLLM(), fake_mcp, ToolPolicy(set(), 1000))
+
+    result = await agent.handle_message("refresh", snapshot_with_omitted_tool(), update_id=1, user_id=1, chat_id=1)
+
+    assert "Tool is not available: omitted_tool" in result.text
+    assert fake_mcp.call_count == 0

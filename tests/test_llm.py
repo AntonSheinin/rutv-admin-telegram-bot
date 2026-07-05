@@ -1,4 +1,4 @@
-from app.openai_llm import parse_openai_response
+from app.llm.openai import parse_openai_response
 
 
 class Item:
@@ -32,3 +32,18 @@ def test_parse_openai_tool_call_malformed_arguments():
 
     parsed = parse_openai_response(BadResponse())
     assert parsed.tool_calls[0].arguments == {}
+
+
+def test_parse_openai_skips_malformed_tool_call_identity():
+    class BadItem:
+        type = "function_call"
+        call_id = ""
+        name = "refresh_playlist"
+        arguments = "{}"
+
+    class BadResponse:
+        output_text = ""
+        output = [BadItem()]
+
+    parsed = parse_openai_response(BadResponse())
+    assert parsed.tool_calls == []

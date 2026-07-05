@@ -11,25 +11,15 @@ class CachedTool:
     input_schema: dict[str, Any]
 
 
-def _as_dict_schema(schema: Any) -> dict[str, Any] | None:
-    if isinstance(schema, dict):
-        return schema
-    if hasattr(schema, "model_dump"):
-        value = schema.model_dump(exclude_none=True)
-        return value if isinstance(value, dict) else None
-    if hasattr(schema, "dict"):
-        value = schema.dict(exclude_none=True)
-        return value if isinstance(value, dict) else None
-    return None
-
-
 def normalize_mcp_tool(tool: Any) -> CachedTool | None:
     name = getattr(tool, "name", None)
     if not isinstance(name, str) or not name:
         return None
 
     description = getattr(tool, "description", None) or ""
-    input_schema = _as_dict_schema(getattr(tool, "inputSchema", None))
+    input_schema = getattr(tool, "inputSchema", None)
+    if input_schema is not None and not isinstance(input_schema, dict):
+        return None
     if not input_schema:
         input_schema = {"type": "object", "properties": {}, "additionalProperties": False}
     if input_schema.get("type") != "object":

@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from app.agent import AgentRunner
-from app.audit import AuditLogger
-from app.config import Settings
-from app.llm import LLMClient
-from app.mcp_client import McpClient, McpClientError, ToolCache
-from app.policy import ToolPolicy
-from app.telegram_bot import TelegramBotService
-from app.webhook_queue import WebhookQueue
+from app.mcp.cache import ToolCache
+from app.mcp.client import McpClientError
+
+if TYPE_CHECKING:
+    from app.agent.runner import AgentRunner
+    from app.core.config import Settings
+    from app.core.structured_log import StructuredLogger
+    from app.llm.client import LLMClient
+    from app.mcp.client import McpClient
+    from app.mcp.policy import ToolPolicy
+    from app.telegram.bot import TelegramBotService
+    from app.telegram.queue import WebhookQueue
 
 
 @dataclass
 class ServiceState:
     settings: Settings | None = None
-    audit: AuditLogger | None = None
+    logger: StructuredLogger | None = None
     telegram: TelegramBotService | None = None
     llm: LLMClient | None = None
     mcp: McpClient | None = None
@@ -24,12 +28,11 @@ class ServiceState:
     tool_cache: ToolCache = field(default_factory=ToolCache)
     agent: AgentRunner | None = None
     queue: WebhookQueue | None = None
-    config_valid: bool = False
+    initialized: bool = False
     webhook_registered: bool = False
-    startup_error: str | None = None
 
     def ready_reason(self) -> str | None:
-        if not self.config_valid:
+        if not self.initialized:
             return "config_invalid"
         if self.queue is None or not self.queue.workers_running:
             return "workers_unavailable"
@@ -51,12 +54,12 @@ async def reload_tools(service: ServiceState) -> dict[str, Any]:
         raise ToolReloadError("clients_unavailable")
     try:
         snapshot = await service.mcp.load_tools(service.policy)
-        await service.tool_cache.replace(snapshot)
-        if service.audit:
-            service.audit.info("tools_reloaded", tool_count=len(snapshot.tools))
+        service.tool_cache.replace(snapshot)
+        if service.logger:
+            service.logger.info("tools_reloaded", tool_count=len(snapshot.tools))
         return {"status": "ok", "tool_count": len(snapshot.tools)}
     except McpClientError as exc:
-        await service.tool_cache.mark_error(str(exc))
-        if service.audit:
-            service.audit.error("tools_reload_failed", error=str(exc))
+        service.tool_cache.mark_error(str(exc))
+        if service.logger:
+            service.logger.error("tools_reload_failed", error=str(exc))
         raise ToolReloadError("mcp_tools_unavailable") from exc

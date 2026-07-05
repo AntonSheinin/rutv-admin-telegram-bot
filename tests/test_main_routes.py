@@ -1,21 +1,22 @@
 from fastapi.testclient import TestClient
 import pytest
 
-from app import main
-from app.audit import AuditLogger
-from app.config import Settings
-from app.mcp_client import ToolCacheSnapshot
-from app.tool_schema import CachedTool
+import app.api.server as server
+from app.core.structured_log import StructuredLogger
+from app.core.config import Settings
+from app.core.state import ServiceState
+from app.mcp.cache import ToolCacheSnapshot
+from app.mcp.schema import CachedTool
 
 from tests.test_config import base_env
 
 
 def configure_minimal_ready_state():
-    service = main.ServiceState()
+    service = ServiceState()
     settings = Settings.from_env(base_env())
     service.settings = settings
-    service.audit = AuditLogger()
-    service.config_valid = True
+    service.logger = StructuredLogger()
+    service.initialized = True
     service.webhook_registered = True
     service.telegram = object()
     service.llm = object()
@@ -41,8 +42,8 @@ def configure_minimal_ready_state():
 @pytest.fixture()
 def client():
     service, _, _ = configure_minimal_ready_state()
-    main.app.state.service = service
-    return TestClient(main.app)
+    server.app.state.service = service
+    return TestClient(server.app)
 
 
 def test_ready_reports_degraded_when_cache_missing(client):
@@ -58,15 +59,10 @@ def test_tools_requires_admin_bearer(client):
 
 def test_tools_returns_public_tool_list(client):
     service, settings, snapshot = configure_minimal_ready_state()
-    main.app.state.service = service
+    server.app.state.service = service
 
-    async def replace():
-        await service.tool_cache.replace(snapshot)
-
-    import anyio
-
-    anyio.run(replace)
-    response = client.get("/tools", headers={"Authorization": f"Bearer {settings.admin_api_token}"})
+    service.tool_cache.replace(snapshot)
+    response = client.get("/tools", headers={"Authorization": f"Bearer {settings.mcp_auth_token}"})
 
     assert response.status_code == 200
     assert response.json()["tools"] == [{"name": "refresh_playlist", "description": "Refresh"}]
@@ -78,7 +74,7 @@ def test_webhook_validates_secret(client):
 
 
 def test_webhook_enqueues_with_valid_secret(client):
-    service = main.app.state.service
+    service = server.app.state.service
     response = client.post(
         "/telegram/webhook",
         json={"update_id": 1},
@@ -86,3 +82,9 @@ def test_webhook_enqueues_with_valid_secret(client):
     )
     assert response.status_code == 200
     assert response.json() == {"status": "enqueued"}
+
+
+def test_server_exports_app():
+    from app.api.server import app
+
+    assert app is server.app
