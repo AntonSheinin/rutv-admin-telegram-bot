@@ -101,3 +101,11 @@ class McpSession:
             return self._client._stringify_result(result)
         except Exception as exc:
             raise McpClientError(f"MCP tool call failed: {exc}") from exc
+
+    async def list_tools(self) -> Any:
+        if self._session is None:
+            raise McpClientError("MCP session is not open")
+        try:
+            return await self._session.list_tools()
+        except Exception as exc:
+            raise McpClientError(f"MCP tool list failed: {exc}") from exc
