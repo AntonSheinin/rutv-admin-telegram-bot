@@ -76,14 +76,12 @@ jobs:
         env:
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEPLOY_SUDO_PASSWORD: ${{ secrets.DEPLOY_SUDO_PASSWORD }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
           set -euo pipefail
           {
             printf 'export GHCR_USERNAME=%q\n' "$GHCR_USERNAME"
             printf 'export GHCR_TOKEN=%q\n' "$GHCR_TOKEN"
-            printf 'export DEPLOY_SUDO_PASSWORD=%q\n' "$DEPLOY_SUDO_PASSWORD"
             printf 'export DEPLOY_PATH=%q\n' "$DEPLOY_PATH"
             printf 'export IMAGE_NAME=%q\n' "$IMAGE_NAME"
             cat <<'EOF'
@@ -96,7 +94,7 @@ jobs:
             exit 1
           }
 
-          printf '%s\n' "$DEPLOY_SUDO_PASSWORD" | sudo -S -p '' -v
+          sudo -n -v
 
           printf '%s\n' "$GHCR_TOKEN" | sudo docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 
