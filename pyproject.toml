@@ -7,8 +7,8 @@ dependencies = [
     "aiogram>=3.7,<4",
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",
-    "openai>=1.99,<2",
-    "mcp>=1.27,<2",
+    "pydantic-ai-slim[mcp,openai]>=1.56,<2",
+    "pydantic-settings>=2.7,<3",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,0 +1,42 @@
+[[servers]]
+name = "playlist"
+display_name = "Playlist Service"
+enabled = true
+url = "http://host.docker.internal:8091/mcp"
+auth_type = "bearer_token"
+disabled_tools = []
+confirmation_required_tools = []
+connect_timeout_seconds = 10
+tool_timeout_seconds = 30
+max_concurrent_calls = 2
+max_tools = 30
+max_tool_description_bytes = 4096
+max_tool_schema_bytes = 16384
+
+[[servers]]
+name = "bitrix24"
+display_name = "Bitrix24"
+enabled = false
+url = "https://mcp.bitrix24.com/mcp/"
+auth_type = "access_token"
+disabled_tools = []
+confirmation_required_tools = [
+  "move_deals_between_stages", "create_deal", "create_funnel_with_custom_stages",
+  "delete_funnel", "move_deals_between_funnels", "rename_funnel_title",
+  "update_funnel_stages", "create_crm_custom_field", "create_new_funnel_stage",
+  "delete_funnel_stage", "rename_funnel_stages", "add_accomplices", "add_auditors",
+  "add_current_user_as_auditor", "delete_accomplices", "delete_auditors",
+  "set_daily_task_recurrence", "set_monthly_by_month_days_task_recurrence",
+  "set_monthly_by_week_days_task_recurrence", "set_weekly_task_recurrence",
+  "set_yearly_by_month_days_task_recurrence", "set_yearly_by_week_days_task_recurrence",
+  "delete_task", "add_task_reminder", "send_chat_message", "create_default_funnel",
+  "create_task", "update_task", "clear_task_deadline", "create_check_list",
+  "create_check_list_item", "update_check_list", "update_check_list_item",
+  "delete_check_list", "delete_check_list_item", "add_task_result", "detach_task_from_group",
+]
+connect_timeout_seconds = 10
+tool_timeout_seconds = 30
+max_concurrent_calls = 2
+max_tools = 50
+max_tool_description_bytes = 4096
+max_tool_schema_bytes = 16384

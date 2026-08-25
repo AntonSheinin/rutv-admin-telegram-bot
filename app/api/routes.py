@@ -22,9 +22,9 @@ async def require_admin_api(
     credentials: HTTPAuthorizationCredentials | None = Depends(admin_bearer),
 ) -> None:
     service = get_state(request)
-    if service.settings is None or credentials is None:
+    if service.settings is None or not service.settings.admin_api_token or credentials is None:
         raise HTTPException(status_code=401, detail={"status": "error", "reason": "unauthorized"})
-    if credentials.scheme.lower() != "bearer" or credentials.credentials != service.settings.mcp_auth_token:
+    if credentials.scheme.lower() != "bearer" or credentials.credentials != service.settings.admin_api_token:
         raise HTTPException(status_code=401, detail={"status": "error", "reason": "unauthorized"})
 
 
@@ -38,7 +38,7 @@ async def ready(request: Request, response: Response) -> dict[str, str]:
     reason = get_state(request).ready_reason()
     if reason is not None:
         response.status_code = 503
-        return {"status": "degraded", "reason": reason}
+        return {"status": "degraded"}
     return {"status": "ok"}
 
 
@@ -69,8 +69,12 @@ async def tools(
     include_schema: bool = False,
     _: None = Depends(require_admin_api),
 ) -> dict[str, Any]:
-    snapshot = get_state(request).tool_cache.snapshot()
-    return {"status": "ok", "tools": snapshot.public_tools(include_schema=include_schema)}
+    generation = get_state(request).generation
+    return {
+        "status": "ok",
+        "tools": generation.tool_names if generation else [],
+        "servers": generation.statuses if generation else {},
+    }
 
 
 @router.post("/tools/reload")

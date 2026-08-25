@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 SENSITIVE_KEY_PARTS = ("token", "secret", "password", "key", "auth", "authorization", "bearer")
+SENSITIVE_TEXT_PATTERNS = (
+    re.compile(r"(?i)(bearer\s+)[a-z0-9._~+\-/=]+"),
+    re.compile(r"(?i)\b(sk-[a-z0-9_-]+)\b"),
+    re.compile(r"(?i)(?:api[_ -]?key|token|secret|password|authorization)\s*[:=]\s*([^\s,;]+)"),
+)
 
 
 def redact(value: Any) -> Any:
@@ -24,7 +30,21 @@ def redact(value: Any) -> Any:
         return [redact(item) for item in value]
     if isinstance(value, tuple):
         return tuple(redact(item) for item in value)
+    if isinstance(value, str):
+        return redact_text(value)
     return value
+
+
+def redact_text(value: str) -> str:
+    redacted = value
+    for pattern in SENSITIVE_TEXT_PATTERNS:
+        if pattern.pattern.lower().startswith("(?i)(bearer"):
+            redacted = pattern.sub(r"\1[REDACTED]", redacted)
+        elif pattern.pattern.lower().startswith("(?i)\\b(sk-"):
+            redacted = pattern.sub("[REDACTED]", redacted)
+        else:
+            redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
 
 
 class StructuredLogger:

@@ -1,53 +1,48 @@
 import pytest
+from pydantic import ValidationError
 
-from app.core.config import ConfigError, Settings
+from app.core.config import Settings
 
 
-def base_env():
+def base_env() -> dict[str, str]:
     return {
-        "TELEGRAM_BOT_TOKEN": "bot",
-        "TELEGRAM_WEBHOOK_URL": "https://example.com/telegram/webhook",
-        "TELEGRAM_WEBHOOK_SECRET": "secret",
-        "TELEGRAM_ADMIN_USER_IDS": "1,2",
-        "MCP_SERVER_URL": "https://example.com/sse",
-        "MCP_AUTH_TOKEN": "mcp",
-        "OPENAI_API_KEY": "openai",
-        "LLM_MODEL": "test-model",
+        "TELEGRAM_BOT_TOKEN": "telegram-token",
+        "TELEGRAM_WEBHOOK_URL": "https://example.test/webhook",
+        "TELEGRAM_WEBHOOK_SECRET": "webhook-secret",
+        "TELEGRAM_ADMIN_USER_IDS": "10,20",
+        "ADMIN_API_TOKEN": "admin-token",
+        "LLM_MODEL": "gpt-5-mini",
+        "OPENAI_API_KEY": "openai-token",
     }
 
 
-def test_settings_parse_defaults():
+def test_settings_parse_global_infrastructure_values():
     settings = Settings.from_env(base_env())
-    assert settings.telegram_admin_user_ids == {1, 2}
-    assert settings.mcp_disabled_tools == set()
-    assert settings.log_level == "INFO"
-    assert settings.max_tool_calls == 5
+    assert settings.telegram_admin_user_ids == {10, 20}
+    assert settings.agent_tracing_enabled is False
 
 
-def test_disabled_tools_parse():
+def test_settings_accept_single_numeric_admin_id():
     env = base_env()
-    env["MCP_DISABLED_TOOLS"] = "delete_playlist, refresh_playlist"
-    settings = Settings.from_env(env)
-    assert settings.mcp_disabled_tools == {"delete_playlist", "refresh_playlist"}
+    env["TELEGRAM_ADMIN_USER_IDS"] = 10
+    assert Settings.from_env(env).telegram_admin_user_ids == {10}
 
 
-def test_admin_ids_required_and_integer():
+def test_settings_reject_missing_global_secret():
     env = base_env()
-    env["TELEGRAM_ADMIN_USER_IDS"] = "abc"
-    with pytest.raises(ConfigError):
+    del env["OPENAI_API_KEY"]
+    with pytest.raises(ValidationError):
         Settings.from_env(env)
 
 
-def test_llm_model_required():
+def test_settings_reject_empty_global_secret():
     env = base_env()
-    env["LLM_MODEL"] = ""
-    with pytest.raises(ConfigError):
+    env["OPENAI_API_KEY"] = " "
+    with pytest.raises(ValidationError):
         Settings.from_env(env)
 
 
-def test_non_openai_provider_does_not_require_openai_key():
+def test_settings_allow_missing_admin_api_token_for_telegram_only_operation():
     env = base_env()
-    env["LLM_PROVIDER"] = "custom"
-    env["OPENAI_API_KEY"] = ""
-    settings = Settings.from_env(env)
-    assert settings.llm_provider == "custom"
+    env["ADMIN_API_TOKEN"] = ""
+    assert Settings.from_env(env).admin_api_token is None

@@ -1,6 +1,6 @@
 # RuTV Admin Bot
 
-FastAPI Telegram webhook service that runs an embedded LLM-backed agent against cached MCP tools from the RuTV playlist service.
+FastAPI Telegram webhook service that runs a Pydantic AI agent against configured MCP servers.
 
 ## Run
 
@@ -22,13 +22,23 @@ The service exposes:
 `/tools`, `/tools/reload`, and `/telegram/webhook/register` require:
 
 ```http
-Authorization: Bearer <MCP_AUTH_TOKEN>
+Authorization: Bearer <ADMIN_API_TOKEN>
+```
+
+## Development
+
+Run checks before committing code changes:
+
+```bash
+python -m compileall app tests
+python -m pytest -q
 ```
 
 ## Notes
 
 - Telegram uses webhook mode only.
-- MCP tools are fetched at startup and by explicit reload only.
-- V1 is single-replica and uses in-memory queue, dedupe, locks, and tool cache.
-- The service uses the official Python MCP SDK with the playlist-service streamable HTTP MCP endpoint.
-- LLM integration goes through `app.llm.LLMClient`; OpenAI lives in `app.llm.openai` and is selected with `LLM_PROVIDER=openai`.
+- MCP servers are defined in `config/mcp_config.toml`; MCP bearer tokens are supplied as `MCP_<SERVER_NAME>_AUTH_TOKEN` environment variables.
+- MCP toolsets are built at startup and by explicit reload only. Disabled servers are not connected.
+- Pydantic AI manages the OpenAI agent and FastMCP-backed MCP toolsets. Tool names are exposed as `<server>_<tool>`.
+- Confirmation-required tools use Pydantic AI deferred approvals. The confirmation is bound to the requesting Telegram user, chat, arguments, and agent generation.
+- V1 is single-replica and uses in-memory queue, dedupe, locks, and pending confirmations.

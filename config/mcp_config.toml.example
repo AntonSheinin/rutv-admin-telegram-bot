@@ -1,0 +1,29 @@
+[[servers]]
+name = "playlist"
+display_name = "Playlist Service"
+enabled = true
+url = "https://playlist-service.example.com/mcp"
+auth_type = "bearer_token"
+disabled_tools = []
+confirmation_required_tools = []
+connect_timeout_seconds = 10
+tool_timeout_seconds = 30
+max_concurrent_calls = 2
+max_tools = 30
+max_tool_description_bytes = 4096
+max_tool_schema_bytes = 16384
+
+[[servers]]
+name = "bitrix24"
+display_name = "Bitrix24"
+enabled = false
+url = "https://mcp.bitrix24.com/mcp/"
+auth_type = "access_token"
+disabled_tools = []
+confirmation_required_tools = []
+connect_timeout_seconds = 10
+tool_timeout_seconds = 30
+max_concurrent_calls = 2
+max_tools = 50
+max_tool_description_bytes = 4096
+max_tool_schema_bytes = 16384

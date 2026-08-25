@@ -1,18 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from app.mcp.cache import ToolCache
-from app.mcp.client import McpClientError
+from app.agent.generation import AgentGeneration, build_generation
+from app.mcp.config import McpConfigError, load_mcp_config
 
 if TYPE_CHECKING:
-    from app.agent.runner import AgentRunner
+    from app.agent.service import AgentService
     from app.core.config import Settings
     from app.core.structured_log import StructuredLogger
-    from app.llm.client import LLMClient
-    from app.mcp.client import McpClient
-    from app.mcp.policy import ToolPolicy
     from app.telegram.bot import TelegramBotService
     from app.telegram.queue import WebhookQueue
 
@@ -22,14 +20,14 @@ class ServiceState:
     settings: Settings | None = None
     logger: StructuredLogger | None = None
     telegram: TelegramBotService | None = None
-    llm: LLMClient | None = None
-    mcp: McpClient | None = None
-    policy: ToolPolicy | None = None
-    tool_cache: ToolCache = field(default_factory=ToolCache)
-    agent: AgentRunner | None = None
+    agent_service: AgentService | None = None
+    generation: AgentGeneration | None = None
+    generations: dict[str, AgentGeneration] = field(default_factory=dict)
     queue: WebhookQueue | None = None
     initialized: bool = False
     webhook_registered: bool = False
+    reload_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    maintenance_task: asyncio.Task[None] | None = None
 
     def ready_reason(self) -> str | None:
         if not self.initialized:
@@ -38,10 +36,12 @@ class ServiceState:
             return "workers_unavailable"
         if not self.webhook_registered:
             return "webhook_not_registered"
-        if not self.tool_cache.is_valid:
-            return self.tool_cache.last_error or "mcp_tools_unavailable"
-        if not all([self.telegram, self.llm, self.mcp, self.policy, self.agent]):
-            return "clients_unavailable"
+        if self.generation is None:
+            return "mcp_tools_unavailable"
+        enabled = [item for item in self.generation.config.servers if item.enabled]
+        healthy = [item for item in self.generation.statuses.values() if item["status"] == "healthy"]
+        if enabled and not healthy:
+            return "mcp_tools_unavailable"
         return None
 
 
@@ -50,16 +50,19 @@ class ToolReloadError(RuntimeError):
 
 
 async def reload_tools(service: ServiceState) -> dict[str, Any]:
-    if not service.mcp or not service.policy:
+    if service.settings is None or service.logger is None:
         raise ToolReloadError("clients_unavailable")
-    try:
-        snapshot = await service.mcp.load_tools(service.policy)
-        service.tool_cache.replace(snapshot)
-        if service.logger:
-            service.logger.info("tools_reloaded", tool_count=len(snapshot.tools))
-        return {"status": "ok", "tool_count": len(snapshot.tools)}
-    except McpClientError as exc:
-        service.tool_cache.mark_error(str(exc))
-        if service.logger:
+    async with service.reload_lock:
+        try:
+            config, tokens = load_mcp_config()
+            candidate = await build_generation(service.settings, config, tokens, service.logger)
+        except (McpConfigError, ValueError, RuntimeError) as exc:
             service.logger.error("tools_reload_failed", error=str(exc))
-        raise ToolReloadError("mcp_tools_unavailable") from exc
+            raise ToolReloadError("mcp_config_invalid") from exc
+        previous = service.generation
+        service.generation = candidate
+        service.generations[candidate.id] = candidate
+        if previous is not None:
+            previous.retired = True
+        service.logger.info("tools_reloaded", servers=candidate.statuses)
+        return {"status": "ok", "tool_count": len(candidate.tool_names), "servers": candidate.statuses}

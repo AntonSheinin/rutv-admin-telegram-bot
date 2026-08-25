@@ -32,3 +32,13 @@ def test_structured_logger_redacts_tuples(capsys):
 
     payload = json.loads(capsys.readouterr().out.strip())
     assert payload["values"][0]["api_key"] == "[REDACTED]"
+
+
+def test_structured_logger_redacts_secrets_embedded_in_text(capsys):
+    logger = StructuredLogger("DEBUG")
+
+    logger.debug("agent_request_start", prompt="Authorization: Bearer secret-value token=another-secret")
+
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert "secret-value" not in payload["prompt"]
+    assert "another-secret" not in payload["prompt"]
