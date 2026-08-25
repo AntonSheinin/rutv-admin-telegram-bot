@@ -1,10 +1,11 @@
 services:
   rutv-admin-bot:
-    image: rutv-admin-bot:latest
-    build: .
+    image: "${RUTV_ADMIN_BOT_IMAGE:-ghcr.io/antonsheinin/rutv-admin-telegram-bot:latest}"
     container_name: rutv-admin-bot
     env_file:
       - .env
+    networks:
+      - playlist-network
     ports:
       - "8001:8000"
     healthcheck:
@@ -14,3 +15,8 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
+
+networks:
+  playlist-network:
+    external: true
+    name: "${PLAYLIST_MCP_NETWORK:-playlist_service_playlist-network}"

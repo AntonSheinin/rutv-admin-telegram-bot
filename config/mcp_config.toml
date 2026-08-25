@@ -2,7 +2,7 @@
 name = "playlist"
 display_name = "Playlist Service"
 enabled = true
-url = "http://host.docker.internal:8091/mcp"
+url = "http://playlist-mcp-server:8091/mcp"
 auth_type = "bearer_token"
 disabled_tools = []
 confirmation_required_tools = []

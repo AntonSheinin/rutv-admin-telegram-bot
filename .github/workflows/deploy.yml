@@ -1,0 +1,142 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: rutv-admin-bot-production-deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPOSITORY: ghcr.io/antonsheinin/rutv-admin-telegram-bot
+  DEPLOY_HOST: 46.224.52.226
+  DEPLOY_USER: anton
+  DEPLOY_PATH: /home/anton/rutv-admin-bot
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve image tag
+        id: image
+        run: printf 'name=%s:%s\n' "$IMAGE_REPOSITORY" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}
+            ${{ env.IMAGE_REPOSITORY }}:latest
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' '46.224.52.226 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMtecSgLD3tqZTWfb+c5qAfRTUH80W+sjKtPph9O9ZMG' > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Create remote deploy directory
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+
+      - name: Sync compose file
+        run: |
+          set -euo pipefail
+          rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.yml "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
+
+      - name: Deploy on server
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_SUDO_PASSWORD: ${{ secrets.DEPLOY_SUDO_PASSWORD }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'export GHCR_USERNAME=%q\n' "$GHCR_USERNAME"
+            printf 'export GHCR_TOKEN=%q\n' "$GHCR_TOKEN"
+            printf 'export DEPLOY_SUDO_PASSWORD=%q\n' "$DEPLOY_SUDO_PASSWORD"
+            printf 'export DEPLOY_PATH=%q\n' "$DEPLOY_PATH"
+            printf 'export IMAGE_NAME=%q\n' "$IMAGE_NAME"
+            cat <<'EOF'
+          set -euo pipefail
+
+          cd "$DEPLOY_PATH"
+
+          test -f .env || {
+            echo "Missing $DEPLOY_PATH/.env. Copy it manually before deploying."
+            exit 1
+          }
+
+          printf '%s\n' "$DEPLOY_SUDO_PASSWORD" | sudo -S -p '' -v
+
+          printf '%s\n' "$GHCR_TOKEN" | sudo docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+
+          previous_image="$(sudo docker inspect rutv-admin-bot --format '{{.Config.Image}}' 2>/dev/null || true)"
+
+          rollback() {
+            if [ -n "$previous_image" ]; then
+              echo "Rolling back to $previous_image"
+              sudo env RUTV_ADMIN_BOT_IMAGE="$previous_image" docker compose up -d --no-build --force-recreate rutv-admin-bot
+            else
+              echo "No previous RuTV admin bot image is available for rollback."
+              return 1
+            fi
+          }
+
+          sudo env RUTV_ADMIN_BOT_IMAGE="$IMAGE_NAME" docker compose pull rutv-admin-bot
+          if ! sudo env RUTV_ADMIN_BOT_IMAGE="$IMAGE_NAME" docker compose up -d --no-build --force-recreate rutv-admin-bot; then
+            rollback || true
+            exit 1
+          fi
+          sudo docker compose ps
+
+          health_status=""
+          ready_status=""
+          for attempt in $(seq 1 30); do
+            health_status="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8001/health || true)"
+            ready_status="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8001/ready || true)"
+            if [ "$health_status" = "200" ] && [ "$ready_status" = "200" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$health_status" != "200" ] || [ "$ready_status" != "200" ]; then
+            echo "RuTV admin bot did not become ready; health=$health_status ready=$ready_status"
+            sudo docker compose logs --tail=100 rutv-admin-bot
+            rollback || true
+            exit 1
+          fi
+
+          echo "RuTV admin bot deployment is ready."
+          EOF
+          } | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" bash
