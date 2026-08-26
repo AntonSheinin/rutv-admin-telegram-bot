@@ -16,10 +16,26 @@ class AgentOutput(BaseModel):
     text: str
 
 
+ToolSignature = tuple[str, str]
+
+
+@dataclass(frozen=True)
+class ToolCallMetadata:
+    server: str
+    tool_name: str
+    signature: ToolSignature
+
+
 @dataclass
 class RunState:
-    tool_calls: int = 0
-    failed_signatures: set[tuple[str, str]] = field(default_factory=set)
+    attempted_tool_calls: int = 0
+    dispatched_tool_calls: int = 0
+    completed_tool_calls: int = 0
+    failed_signatures: set[ToolSignature] = field(default_factory=set)
+    in_flight_calls: dict[str, ToolCallMetadata] = field(default_factory=dict)
+    unknown_outcomes: dict[str, ToolCallMetadata] = field(default_factory=dict)
+    last_server: str | None = None
+    last_tool_name: str | None = None
     approval_resume_only: bool = False
     approved_tool_call_id: str | None = None
 
